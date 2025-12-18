@@ -1773,16 +1773,27 @@ func (c *streamableClientConn) handleJSON(requestSummary string, resp *http.Resp
 // stream is complete when we receive its response. Otherwise, this is the
 // standalone stream.
 func (c *streamableClientConn) handleSSE(ctx context.Context, requestSummary string, resp *http.Response, forCall *jsonrpc2.Request) {
+	var currentLastEventID string
+	retryCount := 0
 	for {
 		// Connection was successful. Continue the loop with the new response.
-		//
-		// TODO(#679): we should set a reasonable limit on the number of times
-		// we'll try getting a response for a given request, or enforce that we
-		// actually make progress.
 		//
 		// Eventually, if we don't get the response, we should stop trying and
 		// fail the request.
 		lastEventID, reconnectDelay, clientClosed := c.processStream(ctx, requestSummary, resp, forCall)
+
+		if currentLastEventID != "" && lastEventID != currentLastEventID {
+			// stream is not progressing even after retries
+			if retryCount == c.maxRetries {
+				// stream didn't progress within the retry limit
+				c.fail(fmt.Errorf("%s: stream failed to progress within the retry limit (session ID: %v)", requestSummary, c.sessionID))
+				return
+			}
+
+			// increase stream processing counter
+			retryCount++
+		}
+		currentLastEventID = lastEventID
 
 		// If the connection was closed by the client, we're done.
 		if clientClosed {
